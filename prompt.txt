@@ -1,0 +1,12 @@
+nom du projet : FileSplitter
+Description
+Il s’agit de créer un logiciel desktop, windows / macos capable de découper un fichier texte en plusieurs fichiers en se basant sur un pattern regex. Lorsqu’un pattern est identifier, il constitue le début d’un nouveau fichier. les nouveaux fichier peuvent être regrouper par dossiers. le groupe sera fait par la premiere règle alphabétique de la regex.
+
+Les fonctionnalités à réaliser,
+* Page de nouvelle découpe.
+   * Renseinger le fichier source
+   * Renseigner le pattern (regex)
+   * Renseigner un répertoire de sortie.
+* Page d’historique
+   * Liste des fichiers modifier avec filtre par nom
+      * chaque ligne présente le nom du ficher source, patern utilisé, chemin de destination, nombre de fichiers crées, progression de la découpe

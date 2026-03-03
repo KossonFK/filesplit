@@ -10,3 +10,6 @@ Les fonctionnalités à réaliser,
 * Page d’historique
    * Liste des fichiers modifier avec filtre par nom
       * chaque ligne présente le nom du ficher source, patern utilisé, chemin de destination, nombre de fichiers crées, progression de la découpe
+
+
+la sortie est dans le dossier *****. Lors du test j'ai constaté des problèmes d'encodage. Conserve l'encodage du fichier source pour tous les fichiers de destinations !

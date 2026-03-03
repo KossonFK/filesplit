@@ -12,6 +12,8 @@
     "dist:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
+    "chardet": "^2.0.0",
+    "iconv-lite": "^0.6.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

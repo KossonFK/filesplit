@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const chardet = require('chardet');
+const iconv = require('iconv-lite');
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -77,6 +79,36 @@ function updateHistoryEntry(id, updates) {
   return null;
 }
 
+// ─── Encoding Detection ───────────────────────────────────────────────────────
+
+/**
+ * Detect encoding and BOM from a raw Buffer.
+ * BOM detection takes priority over chardet (more reliable for UTF-16).
+ * Returns { encoding: string, bom: Buffer|null }
+ */
+function detectEncodingAndBOM(buffer) {
+  // UTF-32 must be checked before UTF-16 (shares first two bytes)
+  if (buffer.length >= 4) {
+    if (buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0xFE && buffer[3] === 0xFF)
+      return { encoding: 'UTF-32BE', bom: buffer.slice(0, 4) };
+    if (buffer[0] === 0xFF && buffer[1] === 0xFE && buffer[2] === 0x00 && buffer[3] === 0x00)
+      return { encoding: 'UTF-32LE', bom: buffer.slice(0, 4) };
+  }
+  if (buffer.length >= 3) {
+    if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF)
+      return { encoding: 'UTF-8', bom: buffer.slice(0, 3) };
+  }
+  if (buffer.length >= 2) {
+    if (buffer[0] === 0xFF && buffer[1] === 0xFE)
+      return { encoding: 'UTF-16LE', bom: buffer.slice(0, 2) };
+    if (buffer[0] === 0xFE && buffer[1] === 0xFF)
+      return { encoding: 'UTF-16BE', bom: buffer.slice(0, 2) };
+  }
+  // No BOM — use chardet statistical detection
+  const detected = chardet.detect(buffer);
+  return { encoding: detected || 'UTF-8', bom: null };
+}
+
 // ─── File Splitting Logic ─────────────────────────────────────────────────────
 
 function sanitizeFilename(str) {
@@ -96,8 +128,16 @@ function getFolderKey(firstGroup) {
 }
 
 async function performSplit(sourcePath, pattern, outputDir, historyId) {
-  // Read source file
-  const content = fs.readFileSync(sourcePath, 'utf-8');
+  // ── 1. Read raw bytes and detect encoding ──────────────────────────────────
+  const rawBuffer = fs.readFileSync(sourcePath);
+  const { encoding, bom } = detectEncodingAndBOM(rawBuffer);
+
+  // iconv-lite decodes the buffer (automatically strips BOM for UTF-8/16)
+  const content = iconv.decode(rawBuffer, encoding);
+
+  console.log(`[FileSplitter] Detected encoding: ${encoding}${bom ? ' (with BOM)' : ''}`);
+
+  // ── 2. Compile regex ───────────────────────────────────────────────────────
   let regex;
   try {
     regex = new RegExp(pattern, 'gm');
@@ -105,7 +145,7 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
     throw new Error(`Invalid regex: ${e.message}`);
   }
 
-  // Find all match positions
+  // ── 3. Find all match positions ────────────────────────────────────────────
   const matches = [];
   let m;
   while ((m = regex.exec(content)) !== null) {
@@ -114,14 +154,14 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
       fullMatch: m[0],
       firstGroup: m[1] !== undefined ? m[1] : m[0],
     });
-    // Prevent infinite loop for zero-length matches
-    if (m.index === regex.lastIndex) regex.lastIndex++;
+    if (m.index === regex.lastIndex) regex.lastIndex++; // prevent infinite loop on zero-length match
   }
 
   if (matches.length === 0) {
     throw new Error('No matches found. Check your regex pattern.');
   }
 
+  // ── 4. Write each chunk re-encoded to the source encoding ─────────────────
   let filesCreated = 0;
   const createdFiles = [];
 
@@ -129,6 +169,14 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
     const start = matches[i].index;
     const end = i + 1 < matches.length ? matches[i + 1].index : content.length;
     const chunk = content.slice(start, end);
+
+    // Re-encode the text chunk back to the original encoding
+    const encodedChunk = iconv.encode(chunk, encoding);
+
+    // Only the first output file gets the BOM (if the source had one)
+    const outputBuffer = (i === 0 && bom)
+      ? Buffer.concat([bom, encodedChunk])
+      : encodedChunk;
 
     // Determine folder from first capture group (alphabetical grouping)
     const folderKey = getFolderKey(matches[i].firstGroup);
@@ -146,7 +194,8 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
       filePath = path.join(folderPath, fileName);
     }
 
-    fs.writeFileSync(filePath, chunk, 'utf-8');
+    // Write raw bytes — no encoding argument so Node doesn't re-interpret content
+    fs.writeFileSync(filePath, outputBuffer);
     createdFiles.push(filePath);
     filesCreated++;
 
@@ -167,7 +216,7 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
-  return { filesCreated, createdFiles };
+  return { filesCreated, createdFiles, encoding };
 }
 
 // ─── IPC Handlers ─────────────────────────────────────────────────────────────
@@ -236,15 +285,15 @@ ipcMain.handle('split:start', async (_, { sourcePath, pattern, outputDir }) => {
   }
 
   try {
-    const { filesCreated } = await performSplit(sourcePath, pattern, outputDir, historyId);
-    const done = updateHistoryEntry(historyId, { status: 'done', filesCreated, progress: 100 });
+    const { filesCreated, encoding } = await performSplit(sourcePath, pattern, outputDir, historyId);
+    updateHistoryEntry(historyId, { status: 'done', filesCreated, progress: 100, encoding });
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('split:progress', {
-        id: historyId, status: 'done', filesCreated, progress: 100,
+        id: historyId, status: 'done', filesCreated, progress: 100, encoding,
       });
     }
-    return { success: true, filesCreated };
+    return { success: true, filesCreated, encoding };
   } catch (err) {
     updateHistoryEntry(historyId, { status: 'error', error: err.message, progress: 0 });
 

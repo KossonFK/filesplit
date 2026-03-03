@@ -62,6 +62,12 @@ function HistoryCard({ entry, onDelete, onOpenDir }) {
                 : `${entry.filesCreated || 0} fichier${(entry.filesCreated || 0) !== 1 ? 's' : ''}`}
             </span>
           </div>
+          {entry.encoding && (
+            <div className="hc-meta-item">
+              <span className="hc-meta-label">Encodage</span>
+              <span className="hc-meta-value accent">{entry.encoding}</span>
+            </div>
+          )}
         </div>
 
         {/* Progress bar */}

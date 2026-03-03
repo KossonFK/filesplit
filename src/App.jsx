@@ -41,7 +41,7 @@ export default function App() {
         <Sidebar page={page} setPage={setPage} />
         <main className="main-content">
           {page === 'new-split' && (
-            <NewSplit setPage={setPage} />
+            <NewSplit setPage={setPage} history={history} />
           )}
           {page === 'history' && (
             <History history={history} setHistory={setHistory} />

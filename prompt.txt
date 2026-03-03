@@ -16,3 +16,6 @@ la sortie est dans le dossier *****. Lors du test j'ai constaté des problèmes 
 
 
 Ta solution ne préserve pas l'ouverture sur plusieurs OS. en effet avec un fichier txt écrit dans windows les charactères é deviennent È quand on exécute la découpe sur macos
+
+
+La page d'historique doit-être rafraichie manuellement pour avoir l'évolution de la progressbar. peux-tu ajouter au moins l'évolution de la bar de progression dessus?

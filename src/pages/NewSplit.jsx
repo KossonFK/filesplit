@@ -91,16 +91,34 @@ function RegexPreview({ pattern, sampleText }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function NewSplit({ setPage }) {
+export default function NewSplit({ setPage, history }) {
   const [sourcePath, setSourcePath]     = useState('');
   const [sourceSize, setSourceSize]     = useState(0);
   const [sampleText, setSampleText]     = useState('');
   const [pattern, setPattern]           = useState('');
   const [outputDir, setOutputDir]       = useState('');
   const [patternError, setPatternError] = useState('');
-  const [running, setRunning]           = useState(false);
-  const [progress, setProgress]         = useState(0);
-  const [result, setResult]             = useState(null); // { type: 'success'|'error', message, filesCreated }
+  const [activeId, setActiveId]         = useState(null); // id de la découpe en cours
+  const [awaitingEntry, setAwaitingEntry] = useState(false); // en attente que l'entrée apparaisse dans history
+
+  // Dès qu'une nouvelle entrée 'running' apparaît dans history, on la capture comme activeId
+  useEffect(() => {
+    if (!awaitingEntry) return;
+    const found = (history || []).find(h => h.status === 'running');
+    if (found) {
+      setActiveId(found.id);
+      setAwaitingEntry(false);
+    }
+  }, [history, awaitingEntry]);
+
+  // Dériver l'état depuis history partagé — aucun listener IPC ici
+  const activeEntry = activeId ? (history || []).find(h => h.id === activeId) : null;
+  const running  = awaitingEntry || (!!activeEntry && activeEntry.status === 'running');
+  const progress = activeEntry?.progress ?? 0;
+  const result   = !activeEntry ? null
+    : activeEntry.status === 'done'  ? { type: 'success', filesCreated: activeEntry.filesCreated }
+    : activeEntry.status === 'error' ? { type: 'error', message: activeEntry.error }
+    : null;
 
   // Validate pattern on change
   useEffect(() => {
@@ -109,36 +127,12 @@ export default function NewSplit({ setPage }) {
     catch (e) { setPatternError(e.message); }
   }, [pattern]);
 
-  // Listen for progress events
-  useEffect(() => {
-    window.electronAPI?.onSplitProgress((data) => {
-      if (data.status === 'running') {
-        setProgress(data.progress || 0);
-      } else if (data.status === 'done') {
-        setRunning(false);
-        setProgress(100);
-        setResult({ type: 'success', filesCreated: data.filesCreated });
-      } else if (data.status === 'error') {
-        setRunning(false);
-        setResult({ type: 'error', message: data.error });
-      }
-    });
-    return () => window.electronAPI?.removeListener('split:progress');
-  }, []);
-
   const pickSource = async () => {
     const p = await window.electronAPI?.openFile();
     if (!p) return;
     setSourcePath(p);
-    setResult(null);
-    setProgress(0);
-    // Read first 4KB for preview
-    try {
-      // We can't use fs directly in renderer; ask main via a small workaround
-      // We'll pass the path and let the preview work from regex alone
-      // Actually, we'll store first 2000 chars from the source for preview
-      setSampleText(''); // Will be populated after a small trick below
-    } catch {}
+    setActiveId(null);
+    setSampleText('');
   };
 
   const pickOutput = async () => {
@@ -150,17 +144,13 @@ export default function NewSplit({ setPage }) {
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
-    setRunning(true);
-    setProgress(0);
-    setResult(null);
-
-    const res = await window.electronAPI?.startSplit({ sourcePath, pattern, outputDir });
-
-    // Progress events handle state updates; this is just a fallback
-    if (!res?.success && !result) {
-      setRunning(false);
-      setResult({ type: 'error', message: res?.error || 'Erreur inconnue' });
-    }
+    setActiveId(null);
+    // On signale qu'on attend l'apparition de la nouvelle entrée dans history.
+    // App.jsx va recevoir 'history:updated' et mettre à jour history → le useEffect
+    // ci-dessus capturera l'ID dès que l'entrée 'running' sera visible.
+    setAwaitingEntry(true);
+    await window.electronAPI?.startSplit({ sourcePath, pattern, outputDir });
+    // startSplit résout après la fin : activeEntry est déjà à jour via history.
   };
 
   const openOutput = () => {
@@ -172,9 +162,8 @@ export default function NewSplit({ setPage }) {
     setSampleText('');
     setPattern('');
     setOutputDir('');
-    setResult(null);
-    setProgress(0);
-    setRunning(false);
+    setActiveId(null);
+    setAwaitingEntry(false);
   };
 
   return (

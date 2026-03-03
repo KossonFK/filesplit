@@ -174,6 +174,11 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
     const end = i + 1 < matches.length ? matches[i + 1].index : content.length;
     const chunk = content.slice(start, end);
 
+    // Skip chunks that contain only the match line and nothing else meaningful.
+    // i.e. everything after the match is whitespace/newlines only.
+    const afterMatch = chunk.slice(matches[i].fullMatch.length);
+    if (afterMatch.trim().length === 0) continue;
+
     // Determine folder from first capture group (alphabetical grouping)
     const folderKey = getFolderKey(matches[i].firstGroup);
     const folderPath = path.join(outputDir, folderKey);

@@ -13,3 +13,6 @@ Les fonctionnalités à réaliser,
 
 
 la sortie est dans le dossier *****. Lors du test j'ai constaté des problèmes d'encodage. Conserve l'encodage du fichier source pour tous les fichiers de destinations !
+
+
+Ta solution ne préserve pas l'ouverture sur plusieurs OS. en effet avec un fichier txt écrit dans windows les charactères é deviennent È quand on exécute la découpe sur macos

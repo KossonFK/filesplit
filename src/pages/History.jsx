@@ -62,10 +62,12 @@ function HistoryCard({ entry, onDelete, onOpenDir }) {
                 : `${entry.filesCreated || 0} fichier${(entry.filesCreated || 0) !== 1 ? 's' : ''}`}
             </span>
           </div>
-          {entry.encoding && (
+          {entry.sourceEncoding && (
             <div className="hc-meta-item">
               <span className="hc-meta-label">Encodage</span>
-              <span className="hc-meta-value accent">{entry.encoding}</span>
+              <span className="hc-meta-value accent" title="Source → Sortie">
+                {entry.sourceEncoding} → UTF-8
+              </span>
             </div>
           )}
         </div>

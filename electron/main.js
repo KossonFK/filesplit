@@ -82,31 +82,29 @@ function updateHistoryEntry(id, updates) {
 // ─── Encoding Detection ───────────────────────────────────────────────────────
 
 /**
- * Detect encoding and BOM from a raw Buffer.
- * BOM detection takes priority over chardet (more reliable for UTF-16).
- * Returns { encoding: string, bom: Buffer|null }
+ * Detect the source encoding from a raw Buffer.
+ * BOM detection takes priority over chardet (more reliable for UTF-16/32).
+ * Returns the detected encoding name (string) compatible with iconv-lite.
  */
-function detectEncodingAndBOM(buffer) {
-  // UTF-32 must be checked before UTF-16 (shares first two bytes)
+function detectSourceEncoding(buffer) {
+  // UTF-32 must be checked before UTF-16 (they share the first two BOM bytes)
   if (buffer.length >= 4) {
     if (buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0xFE && buffer[3] === 0xFF)
-      return { encoding: 'UTF-32BE', bom: buffer.slice(0, 4) };
+      return 'UTF-32BE';
     if (buffer[0] === 0xFF && buffer[1] === 0xFE && buffer[2] === 0x00 && buffer[3] === 0x00)
-      return { encoding: 'UTF-32LE', bom: buffer.slice(0, 4) };
+      return 'UTF-32LE';
   }
   if (buffer.length >= 3) {
     if (buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF)
-      return { encoding: 'UTF-8', bom: buffer.slice(0, 3) };
+      return 'UTF-8';
   }
   if (buffer.length >= 2) {
-    if (buffer[0] === 0xFF && buffer[1] === 0xFE)
-      return { encoding: 'UTF-16LE', bom: buffer.slice(0, 2) };
-    if (buffer[0] === 0xFE && buffer[1] === 0xFF)
-      return { encoding: 'UTF-16BE', bom: buffer.slice(0, 2) };
+    if (buffer[0] === 0xFF && buffer[1] === 0xFE) return 'UTF-16LE';
+    if (buffer[0] === 0xFE && buffer[1] === 0xFF) return 'UTF-16BE';
   }
-  // No BOM — use chardet statistical detection
-  const detected = chardet.detect(buffer);
-  return { encoding: detected || 'UTF-8', bom: null };
+  // No BOM — statistical detection. chardet may return e.g. 'windows-1252',
+  // 'ISO-8859-1', 'Shift_JIS', etc. iconv-lite supports all of them.
+  return chardet.detect(buffer) || 'UTF-8';
 }
 
 // ─── File Splitting Logic ─────────────────────────────────────────────────────
@@ -128,14 +126,14 @@ function getFolderKey(firstGroup) {
 }
 
 async function performSplit(sourcePath, pattern, outputDir, historyId) {
-  // ── 1. Read raw bytes and detect encoding ──────────────────────────────────
+  // ── 1. Read raw bytes, detect and decode the source encoding ────────────────
   const rawBuffer = fs.readFileSync(sourcePath);
-  const { encoding, bom } = detectEncodingAndBOM(rawBuffer);
+  const sourceEncoding = detectSourceEncoding(rawBuffer);
 
-  // iconv-lite decodes the buffer (automatically strips BOM for UTF-8/16)
-  const content = iconv.decode(rawBuffer, encoding);
+  // iconv-lite handles BOM stripping automatically for UTF-8/16/32
+  const content = iconv.decode(rawBuffer, sourceEncoding);
 
-  console.log(`[FileSplitter] Detected encoding: ${encoding}${bom ? ' (with BOM)' : ''}`);
+  console.log(`[FileSplitter] Source encoding detected: ${sourceEncoding} → output: UTF-8`);
 
   // ── 2. Compile regex ───────────────────────────────────────────────────────
   let regex;
@@ -161,7 +159,13 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
     throw new Error('No matches found. Check your regex pattern.');
   }
 
-  // ── 4. Write each chunk re-encoded to the source encoding ─────────────────
+  // ── 4. Write each chunk as UTF-8 (cross-platform safe) ────────────────────
+  //
+  // WHY UTF-8 and not the source encoding?
+  // Re-encoding to e.g. Windows-1252 produces correct bytes but macOS/Linux
+  // open .txt files as UTF-8 by default, turning é (0xE9) into garbage (È).
+  // UTF-8 is the universal standard: Windows 10+, macOS and Linux all read it
+  // correctly without any manual configuration.
   let filesCreated = 0;
   const createdFiles = [];
 
@@ -169,14 +173,6 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
     const start = matches[i].index;
     const end = i + 1 < matches.length ? matches[i + 1].index : content.length;
     const chunk = content.slice(start, end);
-
-    // Re-encode the text chunk back to the original encoding
-    const encodedChunk = iconv.encode(chunk, encoding);
-
-    // Only the first output file gets the BOM (if the source had one)
-    const outputBuffer = (i === 0 && bom)
-      ? Buffer.concat([bom, encodedChunk])
-      : encodedChunk;
 
     // Determine folder from first capture group (alphabetical grouping)
     const folderKey = getFolderKey(matches[i].firstGroup);
@@ -194,8 +190,8 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
       filePath = path.join(folderPath, fileName);
     }
 
-    // Write raw bytes — no encoding argument so Node doesn't re-interpret content
-    fs.writeFileSync(filePath, outputBuffer);
+    // Write as UTF-8 — Node's default, no BOM, universally readable
+    fs.writeFileSync(filePath, chunk, 'utf-8');
     createdFiles.push(filePath);
     filesCreated++;
 
@@ -216,7 +212,7 @@ async function performSplit(sourcePath, pattern, outputDir, historyId) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
-  return { filesCreated, createdFiles, encoding };
+  return { filesCreated, createdFiles, sourceEncoding };
 }
 
 // ─── IPC Handlers ─────────────────────────────────────────────────────────────
@@ -285,15 +281,15 @@ ipcMain.handle('split:start', async (_, { sourcePath, pattern, outputDir }) => {
   }
 
   try {
-    const { filesCreated, encoding } = await performSplit(sourcePath, pattern, outputDir, historyId);
-    updateHistoryEntry(historyId, { status: 'done', filesCreated, progress: 100, encoding });
+    const { filesCreated, sourceEncoding } = await performSplit(sourcePath, pattern, outputDir, historyId);
+    updateHistoryEntry(historyId, { status: 'done', filesCreated, progress: 100, sourceEncoding });
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('split:progress', {
-        id: historyId, status: 'done', filesCreated, progress: 100, encoding,
+        id: historyId, status: 'done', filesCreated, progress: 100, sourceEncoding,
       });
     }
-    return { success: true, filesCreated, encoding };
+    return { success: true, filesCreated, sourceEncoding };
   } catch (err) {
     updateHistoryEntry(historyId, { status: 'error', error: err.message, progress: 0 });
 
